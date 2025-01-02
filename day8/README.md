@@ -7,4 +7,5 @@ sudo umount /mnt/rp2040
 picocom /dev/ttyACM0 -b 115200
 ```
 
+https://github.com/user-attachments/assets/84b88584-d28d-4acf-81f6-04424bda084d
 
