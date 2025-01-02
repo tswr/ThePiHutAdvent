@@ -1,5 +1,7 @@
 #include <array>
 #include <cerrno>
+#include <cstddef>
+#include <hardware/irq.h>
 #include <limits>
 #include <optional>
 
@@ -11,7 +13,7 @@
 #include <pico.h>
 #include <pico/time.h>
 #include <type_traits>
-#
+
 #include "hardware/adc.h"
 #include "hardware/clocks.h"
 #include "hardware/gpio.h"
@@ -172,8 +174,32 @@ public:
     }
     // printf("rom: %llu\n", readRom());
     skipRom();
-    readTemperature();
-    return {};
+
+    // Convert T
+    constexpr uint8_t CONVERT_T = 0x44;
+    printf("Converting temperature started\n");
+    writeByte(CONVERT_T);
+    while (!readBit()) {
+    }
+    printf("Converting temperature finished\n");
+
+    if (!initialize()) {
+      return {};
+    }
+    // printf("rom: %llu\n", readRom());
+    skipRom();
+    // Read scratchpad
+    printf("Reading temperature\n");
+    constexpr uint8_t READ_SCRATCHPAD = 0xBE;
+    writeByte(READ_SCRATCHPAD);
+    std::array<uint8_t, 9> scratchpad{0};
+    readBytes(scratchpad);
+
+    printf("scratchpad:\n");
+    for (const auto &byte : scratchpad) {
+      printf("%d\n", byte);
+    }
+    return decodeTemperature(scratchpad[0], scratchpad[1]);
   }
 
 private:
@@ -227,6 +253,7 @@ private:
   }
 
   void writeByte(uint8_t byte) {
+    printf("Writing byte: %02X\n", byte);
     for (int i = 0; i < 8; ++i) {
       writeBit(byte & 1);
       byte >>= 1;
@@ -240,7 +267,14 @@ private:
         byte |= (1 << i);
       }
     }
+    printf("Read byte: %02X\n", byte);
     return byte;
+  }
+
+  template <size_t N> void readBytes(std::array<uint8_t, N> &bytes) {
+    for (auto &byte : bytes) {
+      byte = readByte();
+    }
   }
 
   uint64_t readRom() {
@@ -255,7 +289,12 @@ private:
 
   void skipRom() { writeByte(0xCC); }
 
-  void readTemperature() {}
+  float decodeTemperature(uint8_t lsb, uint8_t msb) {
+    int16_t rawTemperature =
+        static_cast<int16_t>(lsb) | (static_cast<int16_t>(msb) << 8);
+    float temperature = rawTemperature / 16.0f;
+    return temperature;
+  }
 
 private:
   int pin_;
@@ -267,6 +306,9 @@ int main() {
   printf("Begin\n");
   sleep_ms(5000);
   DS18B20 sensor(26);
-  sensor.getTemperature();
+  while (1) {
+    printf("Temperature: %f\n", *sensor.getTemperature());
+    sleep_ms(1000);
+  }
   return 0;
 }
