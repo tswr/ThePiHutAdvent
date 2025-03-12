@@ -10,9 +10,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 pico_sdk_init()
 
-add_executable(blink blink.cpp)
+add_executable(blink blink.cpp ws2812.pio)
+pico_generate_pio_header(blink ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
 
-target_link_libraries(blink pico_stdlib hardware_adc hardware_pwm hardware_i2c)
+target_link_libraries(blink pico_stdlib hardware_adc hardware_pwm hardware_i2c hardware_pio)
 
 pico_enable_stdio_usb(blink 1)
 pico_enable_stdio_uart(blink 1)
