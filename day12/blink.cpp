@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstddef>
@@ -7,6 +8,7 @@
 #include <string>
 
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -464,183 +466,137 @@ public:
   }
 };
 
+struct Color {
+  uint8_t red;
+  uint8_t green;
+  uint8_t blue;
+};
+
 template <size_t N> class WS2812 {
 public:
-  explicit WS2812(int pin) : pin_(pin) {
-    gpio_init(pin_);
-    gpio_set_dir(pin_, GPIO_OUT);
+  explicit WS2812(int pin, bool isRGBW) : pin_(pin) {
+
+    bool success = pio_claim_free_sm_and_add_program_for_gpio_range(
+        &ws2812_program, &pio_, &sm_, &offset_, pin_, 1, true);
+    hard_assert(success);
+
+    ws2812_program_init(pio_, sm_, offset_, pin_, 800000, isRGBW);
   }
-  struct Color {
-    uint8_t red;
-    uint8_t green;
-    uint8_t blue;
-  };
+
+  ~WS2812() {
+    pio_remove_program_and_unclaim_sm(&ws2812_program, pio_, sm_, offset_);
+  }
 
   void setColors(const std::array<Color, N> &colors) {
     for (const auto &color : colors) {
       sendColor(color);
     }
-    resetLine();
   }
+
+  static constexpr int numPixels() { return N; };
 
 private:
-  static constexpr int kTime0High = 400;
-  static constexpr int kTime0Low = 850;
-  static constexpr int kTime1High = 800;
-  static constexpr int kTime1Low = 450;
-  static constexpr int kResetTime = 50000;
-
-  static constexpr int kCycles0High = 53;
-  static constexpr int kCycles0Low = 106;
-  static constexpr int kCycles1High = 106;
-  static constexpr int kCycles1Low = 53;
-  static constexpr int kResetCycles = 8000;
-
-  void delay_cycles(uint32_t cycles) {
-    while (cycles--) {
-      __asm__ __volatile__("nop");
-    }
-  }
-
-  void sendBit(bool bit) {
-    // if (bit) {
-    //   gpio_put(pin_, 1);
-    //   sleep_us(kTime1High);
-    //   gpio_put(pin_, 0);
-    //   sleep_us(kTime1Low);
-    // } else {
-    //   gpio_put(pin_, 1);
-    //   sleep_us(kTime0High);
-    //   gpio_put(pin_, 0);
-    //   sleep_us(kTime0Low);
-    // }
-    if (bit) {
-      sio_hw->gpio_set = (1u << pin_); // High
-      delay_cycles(kCycles1High);      // T1H
-      sio_hw->gpio_clr = (1u << pin_); // Low
-      delay_cycles(kCycles1Low);       // T1L
-    } else {
-      sio_hw->gpio_set = (1u << pin_); // High
-      delay_cycles(kCycles0High);      // T0H
-      sio_hw->gpio_clr = (1u << pin_); // Low
-      delay_cycles(kCycles0Low);       // T0L
-    }
-  }
-
-  void sendByte(uint8_t byte) {
-    // Most significant bit first
-    for (int i = 7; i >= 0; i--) {
-      sendBit((byte >> i) & 0x01);
-    }
+  static inline uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
+    return ((uint32_t)(r) << 8) | ((uint32_t)(g) << 16) | (uint32_t)(b);
   }
 
   void sendColor(const Color &color) {
     // Sent in GRB order
-    sendByte(color.green);
-    sendByte(color.red);
-    sendByte(color.blue);
-  }
-
-  void resetLine() {
-    sio_hw->gpio_clr = (1u << pin_);
-    delay_cycles(kResetCycles);
+    uint32_t pixelRGB = urgb_u32(color.red, color.green, color.blue);
+    pio_sm_put_blocking(pio_, sm_, pixelRGB << 8u);
   }
 
 private:
   int pin_;
+  PIO pio_;
+  uint sm_;
+  uint offset_;
 };
 
-int mainNN() {
-  stdio_init_all();
-
-  // DS18B20 sensor(26);
-  // SSD1906 oled(16, 17);
-  // sleep_ms(5000);
-  //
-  // Framebuffer framebuffer;
-  //
-  // while (1) {
-  //   framebuffer.clear();
-  //   std::string output =
-  //       "Temp: " + std::to_string(*sensor.getTemperature()) + " C";
-  //   framebuffer.putText(0, 12, output);
-  //   oled.show(framebuffer);
-  //   sleep_ms(1000);
-  // }
-
-  std::array<WS2812<15>::Color, 15> colors = {{{255, 0, 0},
-                                               {0, 255, 0},
-                                               {0, 0, 255},
-                                               {255, 0, 0},
-                                               {0, 255, 0},
-                                               {0, 0, 255},
-                                               {255, 0, 0},
-                                               {0, 255, 0},
-                                               {0, 0, 255},
-                                               {255, 0, 0},
-                                               {0, 255, 0},
-                                               {0, 0, 255},
-                                               {255, 0, 0},
-                                               {0, 255, 0},
-                                               {0, 0, 255}}};
-
-  WS2812<15> ledStrip(28);
-  while (1) {
-    ledStrip.setColors(colors);
-    sleep_ms(1000);
-  }
-
-  return 0;
+uint8_t gammaCorrect(uint8_t value, float gamma = 2.2) {
+  return uint8_t(std::pow(value / 255.0f, gamma) * 255.0f);
 }
 
-static inline void put_pixel(PIO pio, uint sm, uint32_t pixel_grb) {
-  pio_sm_put_blocking(pio, sm, pixel_grb << 8u);
+// Compute perceived brightness
+float luminance(Color color) {
+  return (color.red + color.green + color.blue) / 3.0f;
 }
 
-static inline uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
-  return ((uint32_t)(r) << 8) | ((uint32_t)(g) << 16) | (uint32_t)(b);
+// Generate a visually pleasing random color
+Color randomColor() {
+  Color color;
+  float brightness;
+
+  do {
+    color.red = rand() % 256;
+    color.green = rand() % 256;
+    color.blue = rand() % 256;
+    brightness = luminance(color);
+  } while (brightness > 30); // Keep within appealing range
+
+  return color;
 }
 
-void pattern_random(PIO pio, uint sm, uint len) {
-  for (uint i = 0; i < len; ++i)
-    put_pixel(pio, sm, rand());
+Color interpolate(Color a, Color b, float x) {
+  return {uint8_t(a.red * x + b.red * (1.0 - x)),
+          uint8_t(a.blue * x + b.blue * (1.0 - x)),
+          uint8_t(a.green * x + b.green * (1.0 - x))};
 }
 
 int main() {
   stdio_init_all();
 
-  // todo get free sm
-  PIO pio;
-  uint sm;
-  uint offset;
+  WS2812<15> ledStrip(28, false);
+  std::array<Color, ledStrip.numPixels()> state = {{{0, 0, 0},
+                                                    {0, 0, 0},
+                                                    {0, 0, 0},
+                                                    {0, 0, 0},
+                                                    {0, 0, 0},
+                                                    {0, 0, 0},
+                                                    {0, 0, 0},
+                                                    {0, 0, 0},
+                                                    {0, 0, 0},
+                                                    {0, 0, 0},
+                                                    {0, 0, 0},
+                                                    {0, 0, 0},
+                                                    {0, 0, 0},
+                                                    {0, 0, 0},
+                                                    {0, 0, 0}}};
 
-  constexpr uint kWs2812Pin = 28;
-  constexpr bool isRGBW = false;
-  constexpr int numPixels = 15;
+  // while (1) {
+  //   const auto startPixel = randomColor();
+  //   const auto endPixel = randomColor();
+  //
+  //   for (int k = ledStrip.numPixels(); k > 0; --k) {
+  //     const auto pixel = interpolate(startPixel, endPixel,
+  //                                    (k - 1.0) / (ledStrip.numPixels()
+  //                                    - 1.0));
+  //
+  //     for (int i = 0; i < k; ++i) {
+  //       if (i != 0) {
+  //         state[i - 1] = {0, 0, 0};
+  //       }
+  //       state[i] = pixel;
+  //       ledStrip.setColors(state);
+  //       sleep_ms(30);
+  //     }
+  //   }
+  //   sleep_ms(1000);
+  // }
 
-  bool success = pio_claim_free_sm_and_add_program_for_gpio_range(
-      &ws2812_program, &pio, &sm, &offset, kWs2812Pin, 1, true);
-  hard_assert(success);
-
-  ws2812_program_init(pio, sm, offset, kWs2812Pin, 800000, isRGBW);
+  float t = 0.0f;
   while (1) {
-    std::array<uint32_t, numPixels> state = {0};
-    for (int k = numPixels; k > 0; --k) {
-      const auto pixel = rand();
-
-      for (int i = 0; i < k; ++i) {
-        if (i != 0) {
-          state[i - 1] = 0;
-        }
-        state[i] = pixel;
-        for (const auto p : state) {
-          put_pixel(pio, sm, p);
-        }
-        sleep_ms(100);
-      }
+    for (int i = 0; i < state.size(); ++i) {
+      state[i] = {static_cast<uint8_t>(127.5 * (std::sin(t + i * 0.2) + 1)),
+                  static_cast<uint8_t>(
+                      127.5 * (std::sin(t + i * 0.2 + 2.0 * M_PI / 3) + 1)),
+                  static_cast<uint8_t>(
+                      127.5 * (std::sin(t + i * 0.2 + 4.0 * M_PI / 3) + 1))};
     }
-    sleep_ms(2000);
+    ledStrip.setColors(state);
+    t += 0.05;
+    sleep_ms(10);
   }
 
-  pio_remove_program_and_unclaim_sm(&ws2812_program, pio, sm, offset);
+  return 0;
 }
