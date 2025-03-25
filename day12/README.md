@@ -6,6 +6,5 @@ sudo sync
 sudo umount /mnt/rp2040
 ```
 
-https://github.com/user-attachments/assets/4ab19b4c-5141-488b-8d5f-678d9a26ed1b
-
+https://github.com/user-attachments/assets/a1040cfb-a00a-4def-9981-57d0b21c096c
 
